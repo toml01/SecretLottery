@@ -1,21 +1,41 @@
 use cosmwasm_std::{
-    to_binary, Api, Binary, CanonicalAddr, Env, Extern, HandleResponse, InitResponse, Querier,
-    StdError, StdResult, Storage,
+    coin, to_binary, Api, Binary, CanonicalAddr, Env, Extern, HandleResponse, InitResponse,
+    Querier, StdError, StdResult, Storage,
 };
 
 use crate::msg::{CountResponse, HandleMsg, InitMsg, QueryMsg};
-use crate::state::{config, config_read, State};
+use crate::state::{config, config_read, Item, State, USCRT_DENOM};
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     msg: InitMsg,
 ) -> StdResult<InitResponse> {
+    let mut items = Vec::<Item>::new();
+    // Init msg.item_count items
+    for i in 0..msg.items_count {
+        items.push(Item {
+            id: i,
+            value: coin(1, USCRT_DENOM),
+            owner: env.message.sender.clone(),
+        });
+    }
+
+    // The golden item
+    if msg.golden != 0 {
+        items[(msg.golden - 1) as usize].value = coin(100, USCRT_DENOM);
+    } else {
+        // TODO random placement
+        items[0].value = coin(100, USCRT_DENOM);
+    }
+
+    // Create state
     let state = State {
-        count: msg.count,
-        owner: env.message.sender,
+        items,
+        contract_owner: env.message.sender.clone(),
     };
 
+    // Save to state
     config(&mut deps.storage).save(&state)?;
 
     Ok(InitResponse::default())
@@ -36,10 +56,10 @@ pub fn try_increment<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     _env: Env,
 ) -> StdResult<HandleResponse> {
-    config(&mut deps.storage).update(|mut state| {
-        state.count += 1;
-        Ok(state)
-    })?;
+    // config(&mut deps.storage).update(|mut state| {
+    //     state.count += 1;
+    //     Ok(state)
+    // })?;
 
     Ok(HandleResponse::default())
 }
@@ -49,13 +69,13 @@ pub fn try_reset<S: Storage, A: Api, Q: Querier>(
     env: Env,
     count: i32,
 ) -> StdResult<HandleResponse> {
-    config(&mut deps.storage).update(|mut state| {
-        if env.message.sender != state.owner {
-            return Err(StdError::Unauthorized { backtrace: None });
-        }
-        state.count = count;
-        Ok(state)
-    })?;
+    // config(&mut deps.storage).update(|mut state| {
+    //     if env.message.sender != state.owner {
+    //         return Err(StdError::Unauthorized { backtrace: None });
+    //     }
+    //     state.count = count;
+    //     Ok(state)
+    // })?;
     Ok(HandleResponse::default())
 }
 
@@ -70,7 +90,7 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
 
 fn query_count<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>) -> StdResult<CountResponse> {
     let state = config_read(&deps.storage).load()?;
-    Ok(CountResponse { count: state.count })
+    Ok(CountResponse { count: 0 })
 }
 
 // ERC-721 interface
@@ -108,7 +128,7 @@ fn balance_of(owner: CanonicalAddr) -> u32 {
 ///  about them do throw.
 /// @param _tokenId The identifier for an NFT
 /// @return The address of the owner of the NFT
-fn owner_of(tokenId: u32) -> CanonicalAddr {
+fn owner_of(token_id: u32) -> CanonicalAddr {
     unimplemented!()
 }
 
