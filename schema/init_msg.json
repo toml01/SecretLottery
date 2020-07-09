@@ -3,12 +3,23 @@
   "title": "InitMsg",
   "type": "object",
   "required": [
-    "count"
+    "golden",
+    "items_count",
+    "name"
   ],
   "properties": {
-    "count": {
+    "golden": {
       "type": "integer",
-      "format": "int32"
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "items_count": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "name": {
+      "type": "string"
     }
   }
 }

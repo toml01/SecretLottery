@@ -5,33 +5,68 @@
     {
       "type": "object",
       "required": [
-        "increment"
+        "safe_transfer_from"
       ],
       "properties": {
-        "increment": {
-          "type": "object"
+        "safe_transfer_from": {
+          "type": "object",
+          "required": [
+            "from",
+            "to",
+            "token_id"
+          ],
+          "properties": {
+            "from": {
+              "$ref": "#/definitions/HumanAddr"
+            },
+            "to": {
+              "$ref": "#/definitions/HumanAddr"
+            },
+            "token_id": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
         }
       }
     },
     {
       "type": "object",
       "required": [
-        "reset"
+        "buy_ticket"
       ],
       "properties": {
-        "reset": {
+        "buy_ticket": {
           "type": "object",
           "required": [
-            "count"
+            "token_id"
           ],
           "properties": {
-            "count": {
+            "token_id": {
               "type": "integer",
-              "format": "int32"
+              "format": "uint32",
+              "minimum": 0.0
             }
           }
         }
       }
+    },
+    {
+      "type": "object",
+      "required": [
+        "end_lottery"
+      ],
+      "properties": {
+        "end_lottery": {
+          "type": "object"
+        }
+      }
     }
-  ]
+  ],
+  "definitions": {
+    "HumanAddr": {
+      "type": "string"
+    }
+  }
 }

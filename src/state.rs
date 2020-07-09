@@ -19,6 +19,7 @@ pub struct Item {
 pub struct State {
     pub items: Vec<Item>,
     pub contract_owner: CanonicalAddr,
+    pub winning_prize: Coin,
 }
 
 pub fn config<S: Storage>(storage: &mut S) -> Singleton<S, State> {

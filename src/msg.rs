@@ -1,4 +1,4 @@
-use cosmwasm_std::HumanAddr;
+use cosmwasm_std::{Coin, HumanAddr};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,10 @@ pub enum HandleMsg {
         to: HumanAddr,
         token_id: u32,
     },
+    BuyTicket {
+        token_id: u32,
+    },
+    EndLottery {},
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

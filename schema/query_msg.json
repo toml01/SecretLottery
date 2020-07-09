@@ -5,13 +5,47 @@
     {
       "type": "object",
       "required": [
-        "get_count"
+        "balance_of"
       ],
       "properties": {
-        "get_count": {
-          "type": "object"
+        "balance_of": {
+          "type": "object",
+          "required": [
+            "owner"
+          ],
+          "properties": {
+            "owner": {
+              "$ref": "#/definitions/HumanAddr"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "owner_of"
+      ],
+      "properties": {
+        "owner_of": {
+          "type": "object",
+          "required": [
+            "token_id"
+          ],
+          "properties": {
+            "token_id": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
         }
       }
     }
-  ]
+  ],
+  "definitions": {
+    "HumanAddr": {
+      "type": "string"
+    }
+  }
 }

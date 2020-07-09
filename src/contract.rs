@@ -1,10 +1,11 @@
 use cosmwasm_std::{
-    coin, log, to_binary, Api, Binary, CanonicalAddr, Env, Extern, HandleResponse, HumanAddr,
-    InitResponse, Querier, StdError, StdResult, Storage,
+    coin, log, to_binary, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Env, Extern,
+    HandleResponse, HandleResult, HumanAddr, InitResponse, Querier, StdError, StdResult, Storage,
+    Uint128,
 };
 use lazy_static::lazy_static;
 
-use crate::msg::{CountResponse, HandleMsg, InitMsg, QueryMsg};
+use crate::msg::{HandleMsg, InitMsg, QueryMsg};
 use crate::state::{config, config_read, Item, State, USCRT_DENOM};
 
 lazy_static! {
@@ -16,29 +17,37 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     env: Env,
     msg: InitMsg,
 ) -> StdResult<InitResponse> {
-    let mut items = Vec::<Item>::new();
     // Init msg.item_count items
+    let mut items = Vec::<Item>::new();
     for i in 0..msg.items_count {
         items.push(Item {
             id: i,
-            value: coin(1, USCRT_DENOM),
-            owner: env.message.sender.clone(),
+            value: coin(1, USCRT_DENOM.clone()),
+            owner: env.contract.address.clone(),
             approved: Vec::<CanonicalAddr>::new(),
         });
     }
 
-    // The golden item
-    if msg.golden != 0 {
-        items[(msg.golden - 1) as usize].value = coin(100, USCRT_DENOM);
-    } else {
-        // TODO random placement
-        items[0].value = coin(100, USCRT_DENOM);
-    }
+    // if env.message.sent_funds[0].amount.u128() <= msg.items_count as u128 {
+    //     return Err(throw_gen_err(format!(
+    //         "You sent only {:?} tokens for {:?} items.",
+    //         env.message.sent_funds[0].amount, msg.items_count
+    //     )));
+    // }
+
+    // Building the winning representation as a coin
+    let winning_prize = Coin {
+        denom: USCRT_DENOM.to_string(),
+        amount: env.message.sent_funds[0].amount,
+    };
+
+    items[msg.golden as usize].value = winning_prize.clone();
 
     // Create state
     let state = State {
         items,
         contract_owner: env.message.sender.clone(),
+        winning_prize: winning_prize.clone(),
     };
 
     // Save to state
@@ -54,13 +63,10 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult<HandleResponse> {
     match msg {
         HandleMsg::SafeTransferFrom { from, to, token_id } => {
-            safe_transfer_from(deps, env, &from, &to, token_id)?;
-            Ok(HandleResponse {
-                messages: vec![],
-                log: vec![],
-                data: None,
-            })
+            safe_transfer_from(deps, env, &from, &to, token_id)
         }
+        HandleMsg::BuyTicket { token_id } => buy_ticket(deps, env, token_id),
+        HandleMsg::EndLottery {} => end_lottery(deps, env),
     }
 }
 
@@ -172,25 +178,8 @@ fn safe_transfer_from_with_data<S: Storage, A: Api, Q: Querier>(
     from: &HumanAddr,
     to: &HumanAddr,
     token_id: u32,
-    data: &[u8],
-) {
-    // TODO implement data part
-    safe_transfer_from(deps, env, from, to, token_id);
-}
-
-/// @notice Transfers the ownership of an NFT from one address to another address
-/// @dev This works identically to the other function with an extra data parameter,
-///  except this function just sets data to "".
-/// @param _from The current owner of the NFT
-/// @param _to The new owner
-/// @param _tokenId The NFT to transfer
-fn safe_transfer_from<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: Env,
-    from: &HumanAddr,
-    to: &HumanAddr,
-    token_id: u32,
-) -> StdResult<()> {
+    data: Vec<u8>,
+) -> StdResult<HandleResponse> {
     // Canonicalize addrs
     let from_addr_raw = deps.api.canonical_address(from)?;
     let to_addr_raw = deps.api.canonical_address(to)?;
@@ -226,8 +215,12 @@ fn safe_transfer_from<S: Storage, A: Api, Q: Querier>(
     }
 
     // Perform transfer
-    match perform_transfer(deps, to_addr_raw, token_id) {
-        Ok(_) => Ok(()),
+    match perform_transfer(deps, &to_addr_raw, token_id) {
+        Ok(_) => Ok(HandleResponse {
+            messages: vec![],
+            log: vec![],
+            data: Some(Binary(data.to_vec())),
+        }),
         Err(e) => {
             return Err(throw_gen_err(format!(
                 "Error transferring Item {:?}: {:?}",
@@ -235,6 +228,22 @@ fn safe_transfer_from<S: Storage, A: Api, Q: Querier>(
             )))
         }
     }
+}
+
+/// @notice Transfers the ownership of an NFT from one address to another address
+/// @dev This works identically to the other function with an extra data parameter,
+///  except this function just sets data to "".
+/// @param _from The current owner of the NFT
+/// @param _to The new owner
+/// @param _tokenId The NFT to transfer
+fn safe_transfer_from<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    from: &HumanAddr,
+    to: &HumanAddr,
+    token_id: u32,
+) -> StdResult<HandleResponse> {
+    safe_transfer_from_with_data(deps, env, from, to, token_id, vec![])
 }
 
 /// @notice Transfer ownership of an NFT -- THE CALLER IS RESPONSIBLE
@@ -253,7 +262,7 @@ fn transfer_from<S: Storage, A: Api, Q: Querier>(
     from: &HumanAddr,
     to: &HumanAddr,
     token_id: u32,
-) -> StdResult<()> {
+) -> StdResult<HandleResponse> {
     // Currently it's the same implementation
     safe_transfer_from(deps, env, from, to, token_id)
 }
@@ -311,11 +320,77 @@ fn is_token_id_valid(token_id: u32, state: &State) -> bool {
 
 fn perform_transfer<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
-    to: CanonicalAddr,
+    to: &CanonicalAddr,
     token_id: u32,
 ) -> StdResult<State> {
     config(&mut deps.storage).update(|mut state| {
-        state.items[token_id as usize].owner = to;
+        state.items[token_id as usize].owner = to.clone();
         Ok(state)
+    })
+}
+
+fn buy_ticket<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    token_id: u32,
+) -> StdResult<HandleResponse> {
+    let sent_funds: Coin = env.message.sent_funds[0].clone();
+
+    // TODO min entry price in state
+    if sent_funds.amount.u128() < 1 {
+        return Err(throw_gen_err(format!(
+            "You sent {:?} funds, it is not enough!",
+            sent_funds.amount
+        )));
+    }
+
+    // let contract_addr_human = deps.api.human_address(&env.contract.address)?;
+    // let sender_addr_human = deps.api.human_address(&env.message.sender)?;
+
+    // Transfer coin to buyer
+    perform_transfer(deps, &env.message.sender, token_id)?;
+
+    Ok(HandleResponse {
+        messages: vec![],
+        log: vec![],
+        data: None,
+    })
+}
+
+fn end_lottery<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+) -> StdResult<HandleResponse> {
+    // TODO Check if contract has expired
+
+    let state = config(&mut deps.storage).load()?;
+    let mut messages: Vec<CosmosMsg> = vec![];
+
+    for item in state.items {
+        let contract_addr: HumanAddr = deps.api.human_address(&env.contract.address)?;
+        let to: HumanAddr = deps.api.human_address(&item.owner)?;
+
+        if to == contract_addr {
+            // to = deps.api.human_address(&state.contract_owner)?;
+            continue;
+        }
+
+        messages.push(CosmosMsg::Bank(BankMsg::Send {
+            from_address: contract_addr.clone(),
+            to_address: to.clone(),
+            amount: vec![item.value],
+        }))
+
+        // TODO Transfer item to zero address
+    }
+
+    // TODO if anything left in the deposit, return to contract owner
+
+    // TODO mark lottery as ended
+
+    Ok(HandleResponse {
+        messages,
+        log: vec![],
+        data: None,
     })
 }

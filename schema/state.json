@@ -3,16 +3,22 @@
   "title": "State",
   "type": "object",
   "required": [
-    "count",
-    "owner"
+    "contract_owner",
+    "items",
+    "winning_prize"
   ],
   "properties": {
-    "count": {
-      "type": "integer",
-      "format": "int32"
-    },
-    "owner": {
+    "contract_owner": {
       "$ref": "#/definitions/CanonicalAddr"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Item"
+      }
+    },
+    "winning_prize": {
+      "$ref": "#/definitions/Coin"
     }
   },
   "definitions": {
@@ -22,6 +28,52 @@
     },
     "CanonicalAddr": {
       "$ref": "#/definitions/Binary"
+    },
+    "Coin": {
+      "type": "object",
+      "required": [
+        "amount",
+        "denom"
+      ],
+      "properties": {
+        "amount": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "denom": {
+          "type": "string"
+        }
+      }
+    },
+    "Item": {
+      "type": "object",
+      "required": [
+        "approved",
+        "id",
+        "owner",
+        "value"
+      ],
+      "properties": {
+        "approved": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CanonicalAddr"
+          }
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "owner": {
+          "$ref": "#/definitions/CanonicalAddr"
+        },
+        "value": {
+          "$ref": "#/definitions/Coin"
+        }
+      }
+    },
+    "Uint128": {
+      "type": "string"
     }
   }
 }
