@@ -12,6 +12,7 @@ pub struct Item {
     pub id: u32,
     pub value: Coin,
     pub owner: CanonicalAddr,
+    pub approved: Vec<CanonicalAddr>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

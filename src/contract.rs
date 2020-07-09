@@ -1,10 +1,15 @@
 use cosmwasm_std::{
-    coin, to_binary, Api, Binary, CanonicalAddr, Env, Extern, HandleResponse, InitResponse,
-    Querier, StdError, StdResult, Storage,
+    coin, log, to_binary, Api, Binary, CanonicalAddr, Env, Extern, HandleResponse, HumanAddr,
+    InitResponse, Querier, StdError, StdResult, Storage,
 };
+use lazy_static::lazy_static;
 
 use crate::msg::{CountResponse, HandleMsg, InitMsg, QueryMsg};
 use crate::state::{config, config_read, Item, State, USCRT_DENOM};
+
+lazy_static! {
+    static ref ZERO_ADDRESS: CanonicalAddr = CanonicalAddr(Binary(vec![0; 8]));
+}
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
@@ -18,6 +23,7 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
             id: i,
             value: coin(1, USCRT_DENOM),
             owner: env.message.sender.clone(),
+            approved: Vec::<CanonicalAddr>::new(),
         });
     }
 
@@ -47,8 +53,16 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     msg: HandleMsg,
 ) -> StdResult<HandleResponse> {
     match msg {
-        HandleMsg::Increment {} => try_increment(deps, env),
-        HandleMsg::Reset { count } => try_reset(deps, env, count),
+        HandleMsg::SafeTransferFrom{from,to,token_id} => {
+            safe_transfer_from(deps, env, &from, &to, token_id)?;
+            Ok(HandleResponse {
+                messages: vec![],
+                log: vec![],
+                data: None,
+            })
+        }
+        // HandleMsg::Increment {} => try_increment(deps, env),
+        // HandleMsg::Reset { count } => try_reset(deps, env, count),
     }
 }
 
@@ -84,13 +98,9 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
     msg: QueryMsg,
 ) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetCount {} => to_binary(&query_count(deps)?),
+        QueryMsg::BalanceOf { owner } => to_binary(&balance_of(deps, &owner)),
+        QueryMsg::OwnerOf { token_id } => to_binary(&owner_of(deps, token_id)),
     }
-}
-
-fn query_count<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>) -> StdResult<CountResponse> {
-    let state = config_read(&deps.storage).load()?;
-    Ok(CountResponse { count: 0 })
 }
 
 // ERC-721 interface
@@ -119,8 +129,26 @@ fn query_count<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>) -> StdRes
 ///  function throws for queries about the zero address.
 /// @param _owner An address for whom to query the balance
 /// @return The number of NFTs owned by `_owner`, possibly zero
-fn balance_of(owner: CanonicalAddr) -> u32 {
-    unimplemented!()
+fn balance_of<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    owner: &HumanAddr,
+) -> StdResult<u32> {
+    let owner_addr_raw = deps.api.canonical_address(&owner)?;
+
+    if owner_addr_raw == *ZERO_ADDRESS {
+        return Err(throw_gen_err("Can't query the zero address!".to_string()));
+    }
+
+    let state = config_read(&deps.storage).load()?;
+    let mut count = 0;
+
+    for item in state.items {
+        if item.owner == owner_addr_raw {
+            count = count + 1;
+        }
+    }
+
+    Ok(count)
 }
 
 /// @notice Find the owner of an NFT
@@ -128,8 +156,31 @@ fn balance_of(owner: CanonicalAddr) -> u32 {
 ///  about them do throw.
 /// @param _tokenId The identifier for an NFT
 /// @return The address of the owner of the NFT
-fn owner_of(token_id: u32) -> CanonicalAddr {
-    unimplemented!()
+fn owner_of<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    token_id: u32,
+) -> StdResult<HumanAddr> {
+    let state = config_read(&deps.storage).load()?;
+
+    // Check to not go out of bounds
+    if !is_token_id_valid(token_id, &state) {
+        return Err(throw_gen_err(format!(
+            "Item {:?} does not exist!",
+            token_id
+        )));
+    }
+
+    let owner_addr_raw = state.items[token_id as usize].owner.clone();
+
+    // Check if item has been redeemed
+    if owner_addr_raw == *ZERO_ADDRESS {
+        return Err(throw_gen_err(format!(
+            "Item {:?} has been redeemed already!",
+            token_id
+        )));
+    }
+
+    deps.api.human_address(&owner_addr_raw)
 }
 
 /// @notice Transfers the ownership of an NFT from one address to another address
@@ -144,13 +195,16 @@ fn owner_of(token_id: u32) -> CanonicalAddr {
 /// @param _to The new owner
 /// @param _tokenId The NFT to transfer
 /// @param data Additional data with no specified format, sent in call to `_to`
-fn safe_transfer_from_with_data(
-    from: CanonicalAddr,
-    to: CanonicalAddr,
+fn safe_transfer_from_with_data<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    from: &HumanAddr,
+    to: &HumanAddr,
     token_id: u32,
     data: &[u8],
 ) {
-    unimplemented!()
+    // TODO implement data part
+    safe_transfer_from(deps, env, from, to, token_id);
 }
 
 /// @notice Transfers the ownership of an NFT from one address to another address
@@ -159,8 +213,51 @@ fn safe_transfer_from_with_data(
 /// @param _from The current owner of the NFT
 /// @param _to The new owner
 /// @param _tokenId The NFT to transfer
-fn safe_transfer_from(from: CanonicalAddr, to: CanonicalAddr, token_id: u32) {
-    unimplemented!()
+fn safe_transfer_from<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    from: &HumanAddr,
+    to: &HumanAddr,
+    token_id: u32,
+) -> StdResult<()> {
+    // Get item from state
+    let state = config_read(&mut deps.storage).load()?;
+    let item = state.items[token_id as usize].clone();
+
+    // Canonicalize addrs
+    let from_addr_raw = deps.api.canonical_address(from)?;
+    let to_addr_raw = deps.api.canonical_address(to)?;
+
+    // Check if owner or approved
+    if !is_owner_or_approved(&item, &env.message.sender) {
+        return Err(StdError::Unauthorized { backtrace: None });
+    }
+
+    // From has to be the owner
+    if from_addr_raw != item.owner {
+        return Err(throw_gen_err(format!(
+            "{:?} is not the owner of {:?} Item!",
+            from, token_id
+        )));
+    }
+
+    if !is_token_id_valid(token_id, &state) {
+        return Err(throw_gen_err(format!(
+            "Item {:?} does not exist!",
+            token_id
+        )));
+    }
+
+    // Perform transfer
+    match perform_transfer(deps, to_addr_raw, token_id) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            return Err(throw_gen_err(format!(
+                "Error transferring Item {:?}: {:?}",
+                token_id, e
+            )))
+        }
+    }
 }
 
 /// @notice Transfer ownership of an NFT -- THE CALLER IS RESPONSIBLE
@@ -173,7 +270,18 @@ fn safe_transfer_from(from: CanonicalAddr, to: CanonicalAddr, token_id: u32) {
 /// @param _from The current owner of the NFT
 /// @param _to The new owner
 /// @param _tokenId The NFT to transfer
-fn transfer_from(from: CanonicalAddr, to: CanonicalAddr, token_id: u32) {
+fn transfer_from<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    from: CanonicalAddr,
+    to: CanonicalAddr,
+    token_id: u32,
+) -> StdResult<()> {
+    let mut state = config(&mut deps.storage).load().unwrap();
+    let mut item = state.items[token_id as usize].clone();
+
+    item.owner = to;
+
     unimplemented!()
 }
 
@@ -211,4 +319,43 @@ fn get_approved(token_id: u32) -> CanonicalAddr {
 /// @return True if `_operator` is an approved operator for `_owner`, false otherwise
 fn is_approved_for_all(owner: CanonicalAddr, operator: CanonicalAddr) -> bool {
     unimplemented!()
+}
+
+fn is_zero_address(addr: CanonicalAddr) -> Result<(), StdError> {
+    if addr == *ZERO_ADDRESS {
+        return Err(StdError::GenericErr {
+            msg: "Can't query the zero address!".to_string(),
+            backtrace: None,
+        });
+    }
+
+    Ok(())
+}
+
+fn throw_gen_err(msg: String) -> StdError {
+    StdError::GenericErr {
+        msg,
+        backtrace: None,
+    }
+}
+
+fn is_owner_or_approved(item: &Item, addr: &CanonicalAddr) -> bool {
+    addr == &item.owner || item.approved.clone().iter().any(|i| i == addr)
+}
+
+fn is_token_id_valid(token_id: u32, state: &State) -> bool {
+    (token_id as usize) < state.items.len()
+}
+
+fn perform_transfer<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    to: CanonicalAddr,
+    token_id: u32,
+) -> StdResult<()> {
+    config(&mut deps.storage).update(|mut state| {
+        state.items[token_id as usize].owner = to;
+        Ok(state)
+    })?;
+
+    Ok(())
 }
