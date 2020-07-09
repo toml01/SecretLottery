@@ -1,6 +1,6 @@
 use cosmwasm_std::{
     coin, to_binary, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Env, Extern,
-    HandleResponse, HumanAddr, InitResponse, Querier, StdError, StdResult, Storage,
+    HandleResponse, HumanAddr, InitResponse, Querier, StdError, StdResult, Storage, Uint128,
 };
 use lazy_static::lazy_static;
 
@@ -16,6 +16,10 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     env: Env,
     msg: InitMsg,
 ) -> StdResult<InitResponse> {
+    if env.message.sent_funds.is_empty() {
+        return Err(throw_gen_err(format!("You have to send a winning prize")));
+    }
+
     // Init msg.item_count items
     let mut items = Vec::<Item>::new();
     for i in 0..msg.items_count {
@@ -40,6 +44,7 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
         items,
         contract_owner: env.message.sender.clone(),
         winning_prize: winning_prize.clone(),
+        deposit: env.message.sent_funds[0].amount,
     };
 
     // Save to state
@@ -103,6 +108,9 @@ fn buy_ticket<S: Storage, A: Api, Q: Querier>(
     env: Env,
     token_id: u32,
 ) -> StdResult<HandleResponse> {
+    if env.message.sent_funds.is_empty() {
+        return Err(throw_gen_err(format!("You can't get tickets for free!")));
+    }
     let sent_funds: Coin = env.message.sent_funds[0].clone();
 
     // TODO min entry price in state
@@ -112,6 +120,11 @@ fn buy_ticket<S: Storage, A: Api, Q: Querier>(
             sent_funds.amount
         )));
     }
+
+    config(&mut deps.storage).update(|mut state| {
+        state.deposit.0 += 1;
+        Ok(state)
+    })?;
 
     // Transfer coin to buyer
     perform_transfer(deps, &env.message.sender, token_id)?;
@@ -129,28 +142,43 @@ fn end_lottery<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult<HandleResponse> {
     // TODO Check if contract has expired
 
-    let state = config(&mut deps.storage).load()?;
+    let mut state = config(&mut deps.storage).load()?;
     let mut messages: Vec<CosmosMsg> = vec![];
+    let contract_addr: HumanAddr = deps.api.human_address(&env.contract.address)?;
 
-    for item in state.items {
-        let contract_addr: HumanAddr = deps.api.human_address(&env.contract.address)?;
+    for item in state.items.clone() {
         let to: HumanAddr = deps.api.human_address(&item.owner)?;
 
         if to == contract_addr {
-            // to = deps.api.human_address(&state.contract_owner)?;
             continue;
         }
 
         messages.push(CosmosMsg::Bank(BankMsg::Send {
             from_address: contract_addr.clone(),
             to_address: to.clone(),
-            amount: vec![item.value],
-        }))
+            amount: vec![item.value.clone()],
+        }));
 
-        // TODO Transfer item to zero address
+        state.deposit.0 -= item.value.amount.u128();
+        state.items[item.id as usize].owner = (*ZERO_ADDRESS).clone();
     }
 
-    // TODO if anything left in the deposit, return to contract owner
+    let owner_addr = deps.api.human_address(&state.contract_owner)?;
+
+    // If anything left in the deposit, return to contract owner
+    if state.deposit.u128() > 0 {
+        messages.push(CosmosMsg::Bank(BankMsg::Send {
+            from_address: contract_addr.clone(),
+            to_address: owner_addr,
+            amount: vec![Coin {
+                denom: USCRT_DENOM.to_string(),
+                amount: state.deposit,
+            }],
+        }));
+    }
+
+    // Save state
+    config(&mut deps.storage).save(&state)?;
 
     // TODO mark lottery as ended
 
