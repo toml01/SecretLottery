@@ -53,7 +53,7 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     msg: HandleMsg,
 ) -> StdResult<HandleResponse> {
     match msg {
-        HandleMsg::SafeTransferFrom{from,to,token_id} => {
+        HandleMsg::SafeTransferFrom { from, to, token_id } => {
             safe_transfer_from(deps, env, &from, &to, token_id)?;
             Ok(HandleResponse {
                 messages: vec![],
@@ -61,36 +61,7 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
                 data: None,
             })
         }
-        // HandleMsg::Increment {} => try_increment(deps, env),
-        // HandleMsg::Reset { count } => try_reset(deps, env, count),
     }
-}
-
-pub fn try_increment<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    _env: Env,
-) -> StdResult<HandleResponse> {
-    // config(&mut deps.storage).update(|mut state| {
-    //     state.count += 1;
-    //     Ok(state)
-    // })?;
-
-    Ok(HandleResponse::default())
-}
-
-pub fn try_reset<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: Env,
-    count: i32,
-) -> StdResult<HandleResponse> {
-    // config(&mut deps.storage).update(|mut state| {
-    //     if env.message.sender != state.owner {
-    //         return Err(StdError::Unauthorized { backtrace: None });
-    //     }
-    //     state.count = count;
-    //     Ok(state)
-    // })?;
-    Ok(HandleResponse::default())
 }
 
 pub fn query<S: Storage, A: Api, Q: Querier>(
@@ -220,13 +191,19 @@ fn safe_transfer_from<S: Storage, A: Api, Q: Querier>(
     to: &HumanAddr,
     token_id: u32,
 ) -> StdResult<()> {
-    // Get item from state
-    let state = config_read(&mut deps.storage).load()?;
-    let item = state.items[token_id as usize].clone();
-
     // Canonicalize addrs
     let from_addr_raw = deps.api.canonical_address(from)?;
     let to_addr_raw = deps.api.canonical_address(to)?;
+
+    // Throw if `to` is the zero address
+    if to_addr_raw == *ZERO_ADDRESS {
+        return Err(throw_gen_err(format!(
+            "Can't burn Items with `safe_transfer_from` function. To burn an Item, use the unsafe `transfer_ftom`"        )));
+    }
+
+    // Get item from state
+    let state = config_read(&mut deps.storage).load()?;
+    let item = state.items[token_id as usize].clone();
 
     // Check if owner or approved
     if !is_owner_or_approved(&item, &env.message.sender) {
@@ -273,16 +250,12 @@ fn safe_transfer_from<S: Storage, A: Api, Q: Querier>(
 fn transfer_from<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
-    from: CanonicalAddr,
-    to: CanonicalAddr,
+    from: &HumanAddr,
+    to: &HumanAddr,
     token_id: u32,
 ) -> StdResult<()> {
-    let mut state = config(&mut deps.storage).load().unwrap();
-    let mut item = state.items[token_id as usize].clone();
-
-    item.owner = to;
-
-    unimplemented!()
+    // Currently it's the same implementation
+    safe_transfer_from(deps, env, from, to, token_id)
 }
 
 /// @notice Change or reaffirm the approved address for an NFT
@@ -321,17 +294,6 @@ fn is_approved_for_all(owner: CanonicalAddr, operator: CanonicalAddr) -> bool {
     unimplemented!()
 }
 
-fn is_zero_address(addr: CanonicalAddr) -> Result<(), StdError> {
-    if addr == *ZERO_ADDRESS {
-        return Err(StdError::GenericErr {
-            msg: "Can't query the zero address!".to_string(),
-            backtrace: None,
-        });
-    }
-
-    Ok(())
-}
-
 fn throw_gen_err(msg: String) -> StdError {
     StdError::GenericErr {
         msg,
@@ -351,11 +313,9 @@ fn perform_transfer<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     to: CanonicalAddr,
     token_id: u32,
-) -> StdResult<()> {
+) -> StdResult<State> {
     config(&mut deps.storage).update(|mut state| {
         state.items[token_id as usize].owner = to;
         Ok(state)
-    })?;
-
-    Ok(())
+    })
 }
