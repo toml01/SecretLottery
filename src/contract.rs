@@ -1,7 +1,6 @@
 use cosmwasm_std::{
-    coin, log, to_binary, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Env, Extern,
-    HandleResponse, HandleResult, HumanAddr, InitResponse, Querier, StdError, StdResult, Storage,
-    Uint128,
+    coin, to_binary, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Env, Extern,
+    HandleResponse, HumanAddr, InitResponse, Querier, StdError, StdResult, Storage,
 };
 use lazy_static::lazy_static;
 
@@ -27,13 +26,6 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
             approved: Vec::<CanonicalAddr>::new(),
         });
     }
-
-    // if env.message.sent_funds[0].amount.u128() <= msg.items_count as u128 {
-    //     return Err(throw_gen_err(format!(
-    //         "You sent only {:?} tokens for {:?} items.",
-    //         env.message.sent_funds[0].amount, msg.items_count
-    //     )));
-    // }
 
     // Building the winning representation as a coin
     let winning_prize = Coin {
@@ -78,6 +70,95 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
         QueryMsg::BalanceOf { owner } => to_binary(&balance_of(deps, &owner)),
         QueryMsg::OwnerOf { token_id } => to_binary(&owner_of(deps, token_id)),
     }
+}
+
+fn throw_gen_err(msg: String) -> StdError {
+    StdError::GenericErr {
+        msg,
+        backtrace: None,
+    }
+}
+
+fn is_owner_or_approved(item: &Item, addr: &CanonicalAddr) -> bool {
+    addr == &item.owner || item.approved.clone().iter().any(|i| i == addr)
+}
+
+fn is_token_id_valid(token_id: u32, state: &State) -> bool {
+    (token_id as usize) < state.items.len()
+}
+
+fn perform_transfer<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    to: &CanonicalAddr,
+    token_id: u32,
+) -> StdResult<State> {
+    config(&mut deps.storage).update(|mut state| {
+        state.items[token_id as usize].owner = to.clone();
+        Ok(state)
+    })
+}
+
+fn buy_ticket<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    token_id: u32,
+) -> StdResult<HandleResponse> {
+    let sent_funds: Coin = env.message.sent_funds[0].clone();
+
+    // TODO min entry price in state
+    if sent_funds.amount.u128() < 1 {
+        return Err(throw_gen_err(format!(
+            "You sent {:?} funds, it is not enough!",
+            sent_funds.amount
+        )));
+    }
+
+    // Transfer coin to buyer
+    perform_transfer(deps, &env.message.sender, token_id)?;
+
+    Ok(HandleResponse {
+        messages: vec![],
+        log: vec![],
+        data: None,
+    })
+}
+
+fn end_lottery<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+) -> StdResult<HandleResponse> {
+    // TODO Check if contract has expired
+
+    let state = config(&mut deps.storage).load()?;
+    let mut messages: Vec<CosmosMsg> = vec![];
+
+    for item in state.items {
+        let contract_addr: HumanAddr = deps.api.human_address(&env.contract.address)?;
+        let to: HumanAddr = deps.api.human_address(&item.owner)?;
+
+        if to == contract_addr {
+            // to = deps.api.human_address(&state.contract_owner)?;
+            continue;
+        }
+
+        messages.push(CosmosMsg::Bank(BankMsg::Send {
+            from_address: contract_addr.clone(),
+            to_address: to.clone(),
+            amount: vec![item.value],
+        }))
+
+        // TODO Transfer item to zero address
+    }
+
+    // TODO if anything left in the deposit, return to contract owner
+
+    // TODO mark lottery as ended
+
+    Ok(HandleResponse {
+        messages,
+        log: vec![],
+        data: None,
+    })
 }
 
 // ERC-721 interface
@@ -273,8 +354,39 @@ fn transfer_from<S: Storage, A: Api, Q: Querier>(
 ///  operator of the current owner.
 /// @param _approved The new approved NFT controller
 /// @param _tokenId The NFT to approve
-fn approve(approved: CanonicalAddr, token_id: u32) {
-    unimplemented!()
+fn approve<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    approved: CanonicalAddr,
+    token_id: u32,
+) -> StdResult<HandleResponse> {
+    let mut state = config(&mut deps.storage).load()?;
+
+    if !is_token_id_valid(token_id, &state) {
+        return Err(throw_gen_err(format!(
+            "Item {:?} does not exist!",
+            token_id
+        )));
+    }
+
+    let mut item = state.items[token_id as usize].clone();
+
+    // Check if owner or approved
+    if !is_owner_or_approved(&item, &env.message.sender) {
+        return Err(StdError::Unauthorized { backtrace: None });
+    }
+
+    if approved == *ZERO_ADDRESS {
+        item.approved = vec![];
+    } else {
+        item.approved.push(approved);
+    }
+
+    // Change approved and save to state
+    state.items[token_id as usize] = item.clone();
+    config(&mut deps.storage).save(&state.clone())?;
+
+    Ok(HandleResponse::default())
 }
 
 /// @notice Enable or disable approval for a third party ("operator") to manage
@@ -301,96 +413,4 @@ fn get_approved(token_id: u32) -> CanonicalAddr {
 /// @return True if `_operator` is an approved operator for `_owner`, false otherwise
 fn is_approved_for_all(owner: CanonicalAddr, operator: CanonicalAddr) -> bool {
     unimplemented!()
-}
-
-fn throw_gen_err(msg: String) -> StdError {
-    StdError::GenericErr {
-        msg,
-        backtrace: None,
-    }
-}
-
-fn is_owner_or_approved(item: &Item, addr: &CanonicalAddr) -> bool {
-    addr == &item.owner || item.approved.clone().iter().any(|i| i == addr)
-}
-
-fn is_token_id_valid(token_id: u32, state: &State) -> bool {
-    (token_id as usize) < state.items.len()
-}
-
-fn perform_transfer<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    to: &CanonicalAddr,
-    token_id: u32,
-) -> StdResult<State> {
-    config(&mut deps.storage).update(|mut state| {
-        state.items[token_id as usize].owner = to.clone();
-        Ok(state)
-    })
-}
-
-fn buy_ticket<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: Env,
-    token_id: u32,
-) -> StdResult<HandleResponse> {
-    let sent_funds: Coin = env.message.sent_funds[0].clone();
-
-    // TODO min entry price in state
-    if sent_funds.amount.u128() < 1 {
-        return Err(throw_gen_err(format!(
-            "You sent {:?} funds, it is not enough!",
-            sent_funds.amount
-        )));
-    }
-
-    // let contract_addr_human = deps.api.human_address(&env.contract.address)?;
-    // let sender_addr_human = deps.api.human_address(&env.message.sender)?;
-
-    // Transfer coin to buyer
-    perform_transfer(deps, &env.message.sender, token_id)?;
-
-    Ok(HandleResponse {
-        messages: vec![],
-        log: vec![],
-        data: None,
-    })
-}
-
-fn end_lottery<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: Env,
-) -> StdResult<HandleResponse> {
-    // TODO Check if contract has expired
-
-    let state = config(&mut deps.storage).load()?;
-    let mut messages: Vec<CosmosMsg> = vec![];
-
-    for item in state.items {
-        let contract_addr: HumanAddr = deps.api.human_address(&env.contract.address)?;
-        let to: HumanAddr = deps.api.human_address(&item.owner)?;
-
-        if to == contract_addr {
-            // to = deps.api.human_address(&state.contract_owner)?;
-            continue;
-        }
-
-        messages.push(CosmosMsg::Bank(BankMsg::Send {
-            from_address: contract_addr.clone(),
-            to_address: to.clone(),
-            amount: vec![item.value],
-        }))
-
-        // TODO Transfer item to zero address
-    }
-
-    // TODO if anything left in the deposit, return to contract owner
-
-    // TODO mark lottery as ended
-
-    Ok(HandleResponse {
-        messages,
-        log: vec![],
-        data: None,
-    })
 }
