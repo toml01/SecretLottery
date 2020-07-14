@@ -5,7 +5,7 @@ use cosmwasm_std::{
 use lazy_static::lazy_static;
 
 use crate::msg::{HandleMsg, InitMsg, QueryMsg};
-use crate::state::{config, config_read, Item, State, USCRT_DENOM};
+use crate::state::{config, config_read, State, Ticket, USCRT_DENOM};
 
 lazy_static! {
     static ref ZERO_ADDRESS: CanonicalAddr = CanonicalAddr(Binary(vec![0; 8]));
@@ -21,9 +21,9 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     }
 
     // Init msg.item_count items
-    let mut items = Vec::<Item>::new();
-    for i in 0..msg.items_count {
-        items.push(Item {
+    let mut items = Vec::<Ticket>::new();
+    for i in 0..msg.ticket_count {
+        items.push(Ticket {
             id: i,
             value: coin(1, USCRT_DENOM.clone()),
             owner: env.contract.address.clone(),
@@ -59,10 +59,10 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     msg: HandleMsg,
 ) -> StdResult<HandleResponse> {
     match msg {
-        HandleMsg::SafeTransferFrom { from, to, token_id } => {
-            safe_transfer_from(deps, env, &from, &to, token_id)
+        HandleMsg::SafeTransferFrom { from, to, ticket_id } => {
+            safe_transfer_from(deps, env, &from, &to, ticket_id)
         }
-        HandleMsg::BuyTicket { token_id } => buy_ticket(deps, env, token_id),
+        HandleMsg::BuyTicket { ticket_id } => buy_ticket(deps, env, ticket_id),
         HandleMsg::EndLottery {} => end_lottery(deps, env),
     }
 }
@@ -73,7 +73,7 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult<Binary> {
     match msg {
         QueryMsg::BalanceOf { owner } => to_binary(&balance_of(deps, &owner)),
-        QueryMsg::OwnerOf { token_id } => to_binary(&owner_of(deps, token_id)),
+        QueryMsg::OwnerOf { ticket_id } => to_binary(&owner_of(deps, ticket_id)),
     }
 }
 
@@ -84,7 +84,7 @@ fn throw_gen_err(msg: String) -> StdError {
     }
 }
 
-fn is_owner_or_approved(item: &Item, addr: &CanonicalAddr) -> bool {
+fn is_owner_or_approved(item: &Ticket, addr: &CanonicalAddr) -> bool {
     addr == &item.owner || item.approved.clone().iter().any(|i| i == addr)
 }
 

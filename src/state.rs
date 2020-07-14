@@ -8,7 +8,7 @@ pub static CONFIG_KEY: &[u8] = b"config";
 pub static USCRT_DENOM: &str = "uscrt";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct Item {
+pub struct Ticket {
     pub id: u32,
     pub value: Coin,
     pub owner: CanonicalAddr,
@@ -17,7 +17,7 @@ pub struct Item {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct State {
-    pub items: Vec<Item>,
+    pub items: Vec<Ticket>,
     pub contract_owner: CanonicalAddr,
     pub winning_prize: Coin,
     pub deposit: Uint128,
